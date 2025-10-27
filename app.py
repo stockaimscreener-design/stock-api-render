@@ -1,125 +1,122 @@
-# =========================================
-# app.py — Render-ready Flask + Yahoo Finance API
-# =========================================
 import asyncio
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 import yfinance as yf
+import time
 
-# -----------------------------
-# Flask App Setup
-# -----------------------------
 app = Flask(__name__)
 CORS(app)
 
+# -----------------------------
+# Cache for sector/industry data
+# -----------------------------
+SECTOR_CACHE = {}
 
 # -----------------------------
-# Fetch Stock Data Function
+# Helper Functions
 # -----------------------------
-def fetch_stock_data(symbol):
-    """
-    Fetch stock data safely from Yahoo Finance.
-    Returns a dictionary or None if data unavailable.
-    """
+async def fetch_sector_info(symbol):
+    """Fetch sector info only if missing."""
+    if symbol in SECTOR_CACHE:
+        return SECTOR_CACHE[symbol]
+
+    try:
+        ticker = yf.Ticker(symbol)
+        info = ticker.info
+        sector = info.get("sector", "Unknown")
+        industry = info.get("industry", "Unknown")
+        SECTOR_CACHE[symbol] = {"sector": sector, "industry": industry}
+        await asyncio.sleep(0.2)  # Prevent Yahoo rate limit
+        return SECTOR_CACHE[symbol]
+    except Exception as e:
+        print(f"⚠️ Could not fetch sector info for {symbol}: {e}")
+        return {"sector": "Unknown", "industry": "Unknown"}
+
+
+async def fetch_quote(symbol):
+    """Fetch real-time quote data for a single stock."""
     try:
         ticker = yf.Ticker(symbol)
         info = ticker.info
 
-        # Basic price data
-        price = info.get("currentPrice") or info.get("regularMarketPrice")
-        if not price:
-            return None
+        # Fetch sector only once per symbol
+        sector_info = await fetch_sector_info(symbol)
 
-        volume = info.get("volume") or info.get("regularMarketVolume")
-        avg_volume = info.get("averageDailyVolume10Day")
-        prev_close = info.get("previousClose") or info.get("regularMarketPreviousClose")
+        price = info.get("regularMarketPrice")
+        volume = info.get("regularMarketVolume")
+        avg_volume = info.get("averageDailyVolume10Day") or info.get("averageDailyVolume3Month") or 1
+        relative_volume = (volume or 0) / avg_volume if avg_volume else 0
 
-        # Change percent
-        change_percent = None
-        if price and prev_close and prev_close != 0:
-            change_percent = round(((price - prev_close) / prev_close) * 100, 4)
+        change_percent = info.get("regularMarketChangePercent")
+        change = info.get("regularMarketChange")
 
-        # Relative volume
-        relative_volume = None
-        if volume and avg_volume and avg_volume != 0:
-            relative_volume = round(volume / avg_volume, 2)
-
-        # Build response dictionary
         return {
             "symbol": symbol,
-            "name": info.get("longName") or info.get("shortName"),
+            "name": info.get("longName") or info.get("shortName") or symbol,
             "price": price,
             "open": info.get("open") or info.get("regularMarketOpen"),
             "high": info.get("dayHigh") or info.get("regularMarketDayHigh"),
             "low": info.get("dayLow") or info.get("regularMarketDayLow"),
             "volume": volume,
             "avg_volume": avg_volume,
+            "relative_volume": relative_volume,
             "change_percent": change_percent,
             "market_cap": info.get("marketCap"),
             "shares_float": info.get("floatShares"),
-            "relative_volume": relative_volume,
             "pe_ratio": info.get("trailingPE"),
             "forward_pe": info.get("forwardPE"),
             "dividend_yield": info.get("dividendYield"),
             "fifty_two_week_high": info.get("fiftyTwoWeekHigh"),
             "fifty_two_week_low": info.get("fiftyTwoWeekLow"),
-            "sector": info.get("sector"),
-            "industry": info.get("industry"),
+            "sector": sector_info.get("sector"),
+            "industry": sector_info.get("industry"),
             "country": info.get("country"),
         }
-
     except Exception as e:
         print(f"⚠️ Error fetching {symbol}: {e}")
-        return None
+        return {"symbol": symbol, "error": str(e)}
 
 
-# -----------------------------
-# Async Batch Processor
-# -----------------------------
 async def process_symbols(symbols):
-    """
-    Processes symbols in batches asynchronously using threads.
-    Each Yahoo call runs in its own background thread.
-    """
+    """Process all symbols one by one to avoid 429 rate limits."""
     results = []
-    batch_size = 50  # adjust if needed for rate-limit handling
-
-    for i in range(0, len(symbols), batch_size):
-        batch = symbols[i : i + batch_size]
-
-        # Run blocking fetches in background threads
-        tasks = [asyncio.to_thread(fetch_stock_data, s) for s in batch]
-
-        # Wait for all tasks to finish
-        batch_results = await asyncio.gather(*tasks)
-
-        # Keep only successful results
-        results.extend([r for r in batch_results if r])
-
+    for symbol in symbols:
+        data = await fetch_quote(symbol)
+        results.append(data)
+        await asyncio.sleep(0.1)  # 10 per second safely
     return results
 
 
 # -----------------------------
-# API Route
+# API Endpoint
 # -----------------------------
 @app.route("/quote", methods=["GET"])
 async def quote_get():
-    """
-    Example: /quote?symbols=AAPL,MSFT,TSLA
-    Returns stock data for provided symbols.
-    """
-    symbols = request.args.get("symbols")
-    if not symbols:
-        return jsonify({"error": "No symbols provided"}), 400
+    """Endpoint: /quote?symbols=AAPL,MSFT,TSLA"""
+    symbols_param = request.args.get("symbols")
 
-    symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
-    results = await process_symbols(symbol_list)
-    return jsonify({"data": results})
+    if not symbols_param:
+        return jsonify({
+            "success": False,
+            "error": "No symbols provided. Use /quote?symbols=AAPL,MSFT,..."
+        }), 400
+
+    symbols = [s.strip().upper() for s in symbols_param.split(",") if s.strip()]
+    print(f"🔍 Fetching quotes for {len(symbols)} symbols: {symbols[:5]}...")
+
+    results = await process_symbols(symbols)
+    valid_results = [r for r in results if r.get("price") is not None]
+
+    return jsonify({
+        "success": True,
+        "count": len(valid_results),
+        "data": valid_results,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+    })
 
 
 # -----------------------------
-# App Entrypoint
+# Entrypoint for Render
 # -----------------------------
 if __name__ == "__main__":
-    # Render start command will run this
     app.run(host="0.0.0.0", port=8000)
