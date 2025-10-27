@@ -9,31 +9,55 @@ CORS(app)
 
 # -----------------------------
 # Async Yahoo Fetch (keeps your response structure)
-# -----------------------------
-async def fetch_symbol(symbol):
+def fetch_stock_data(symbol):
     try:
         ticker = yf.Ticker(symbol)
         info = ticker.info
 
-        return {
-            "symbol": symbol,
-            "price": info.get("currentPrice") or info.get("regularMarketPrice"),
-            "previousClose": info.get("previousClose"),
-            "change": round(
-                ((info.get("currentPrice") or info.get("regularMarketPrice", 0)) - info.get("previousClose", 0))
-                / info.get("previousClose", 1)
-                * 100,
-                2,
-            ) if info.get("previousClose") else None,
-            "volume": info.get("volume"),
-            "exchange": info.get("exchange"),
-            "marketCap": info.get("marketCap"),
-            "currency": info.get("currency"),
-            "name": info.get("shortName") or info.get("longName"),
-        }
-    except Exception as e:
-        return {"symbol": symbol, "error": str(e)}
+        price = info.get('currentPrice') or info.get('regularMarketPrice')
+        if not price:
+            return None
 
+        volume = info.get('volume') or info.get('regularMarketVolume')
+        avg_volume = info.get('averageDailyVolume10Day')
+        prev_close = info.get('previousClose') or info.get('regularMarketPreviousClose')
+
+        # Calculate change percent
+        change_percent = None
+        if price and prev_close and prev_close != 0:
+            change_percent = round(((price - prev_close) / prev_close) * 100, 4)
+
+        # Calculate relative volume
+        relative_volume = None
+        if volume and avg_volume and avg_volume != 0:
+            relative_volume = round(volume / avg_volume, 2)
+
+        return {
+            'symbol': symbol,
+            'name': info.get('longName') or info.get('shortName'),
+            'price': price,
+            'open': info.get('open') or info.get('regularMarketOpen'),
+            'high': info.get('dayHigh') or info.get('regularMarketDayHigh'),
+            'low': info.get('dayLow') or info.get('regularMarketDayLow'),
+            'volume': volume,
+            'avg_volume': avg_volume,
+            'change_percent': change_percent,
+            'market_cap': info.get('marketCap'),
+            'shares_float': info.get('floatShares'),
+            'relative_volume': relative_volume,
+            'pe_ratio': info.get('trailingPE'),
+            'forward_pe': info.get('forwardPE'),
+            'dividend_yield': info.get('dividendYield'),
+            'fifty_two_week_high': info.get('fiftyTwoWeekHigh'),
+            'fifty_two_week_low': info.get('fiftyTwoWeekLow'),
+            'sector': info.get('sector'),
+            'industry': info.get('industry'),
+            'country': info.get('country'),
+        }
+
+    except Exception as e:
+        print(f"Error fetching {symbol}: {e}")
+        return None
 
 # -----------------------------
 # Helper: batch process for large lists
