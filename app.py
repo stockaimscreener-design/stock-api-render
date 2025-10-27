@@ -67,7 +67,7 @@ async def process_symbols(symbols, batch_size=100):
     results = []
     for i in range(0, len(symbols), batch_size):
         batch = symbols[i : i + batch_size]
-        tasks = [fetch_symbol(s) for s in batch]
+        tasks = [fetch_stock_data(s) for s in batch]
         batch_results = await asyncio.gather(*tasks)
         results.extend(batch_results)
     return results
