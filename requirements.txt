@@ -1,5 +1,4 @@
-flask[async]
-flask-cors
-yfinance
-aiohttp
-
+flask==3.0.3
+flask-cors==4.0.1
+yfinance==0.2.50
+asgiref==3.8.1
